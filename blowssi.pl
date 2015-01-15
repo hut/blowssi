@@ -27,9 +27,6 @@ use Crypt::ircBlowfish;
 use Crypt::CBC;
 use MIME::Base64;
 
-# include DH1080 needed
-use Crypt::ircDH1080;
-
 # include irssi stuff
 use Irssi::Irc;
 use Irssi;
@@ -46,7 +43,7 @@ my %IRSSI = (
   authors => 'John "Gothi[c]" Sennesael & Tanesha',
   contact => 'john@adminking.com',
   name => 'blowssi',
-  description => 'Fish and mircryption compatible blowfish/cbc encryption (+dh1080 keyx)',
+  description => 'Fish and mircryption compatible blowfish/cbc encryption',
   license => 'GNU GPL v3',
   url => 'http://linkerror.com/blowssi.cgi'
 );
@@ -63,10 +60,6 @@ my %channels;
 my $config_file = Irssi::get_irssi_dir()."/blowssi.conf";
 # init blowfish object
 my $blowfish = new Crypt::ircBlowfish;
-# init dh1080 object
-my $dh1080 = new Crypt::ircDH1080;
-# Are we using cbc with keyx?
-my $keyx_cbc = 0;
 
 # ----------------- subroutines --------------------
 
@@ -153,8 +146,6 @@ sub saveconf
   # write out config
   while ( ($channel,$key) = each(%channels) )
   {
-	  # don't save keyx keys (as the pub/priv key changes for each load)
-	  next if $key =~ /^keyx:/;
     if ( ($channel) && ($key) )
     {
       print CONF "$channel:$key\n";
@@ -254,102 +245,8 @@ sub blowhelp {
 	Irssi::print("/blowon                         Turn blowfish back on.");
 	Irssi::print("/blowoff                        Temporarily disable all blowfish.");
 	Irssi::print("/blowkey <user|chan> <key>      Statically set key for a channel.");
-	Irssi::print("/blowkeyx <cbc|ebc> <user|chan> Perform DH1080 key exchange with user.");
 	Irssi::print("/blowdel <user|chan>            Remove key for user.");
 	Irssi::print("");
-}
-
-sub keyx {
-  # get params
-	my ($params, $server, $winit) = @_;  
-  my ($method,$user) = split(/\s/,$params);
-  #Irssi::print("Debug: PARAMS='$params' USER='$user' METHOD='$method'");
-  # check encryption method validity
-  if (!$method)
-  {
-    Irssi::print("Error: no method specified. Specify either cbc or ecb.");
-  }
-  if (($method ne 'cbc') and ($method ne 'ecb'))
-  {
-    Irssi::print("Error: unknown method: $method. Specify either cbc or ecb. Correct syntax is /blowkeyx method nickname");
-    return 1;
-  }
-	# check user validity
-	if (!$user)
-	{
-		Irssi::print("Error: no user specified. Syntax is /blowkeyx method nickname");
-		return 1;
-	}
-	# remove the old key (if any)
-	delete $channels{$user};
-  # get pubkey, store header...
-	my $pubkey = $dh1080->public_key;  
-  my $keyx_header="DH1080_INIT";
-  # manipulate header for cbc if needed.
-  if ($method eq 'cbc')
-  {
-    $keyx_header .= '_cbc';
-    $keyx_cbc = 1;
-  }
-  else
-  {
-    $keyx_cbc = 0;
-  }
-	$server->command("\^notice $user $keyx_header $pubkey");
-	Irssi::print("KeyX started for $user using $method");
-}
-
-sub keyx_handler {
-  # Get params.
-	my ($event_type, $server, $message, $user) = @_;  
-	chomp $message;
-  # Uncomment for debug.
-	# Irssi::print("$event_type keyx_finish on $message"); 
-  
-	my ($command, $cbcflag, $peer_public) = $message =~ /DH1080_(INIT|FINISH)(_cbc)? (.*)/i;
-  if (!$peer_public)
-  {
-    # (_cbc)? did not match, so $cbcflag is now really $peer_public. fixing that:
-    $peer_public = $cbcflag;
-    $cbcflag='';
-  }
-  if ($cbcflag eq '_cbc')
-  {
-    $keyx_cbc = 1;
-  }
-  else
-  {
-    $keyx_cbc = 0;
-  }
-	return 1 unless $command && $peer_public;
-
-	# handle it.
-	my $secret = $dh1080->get_shared_secret($peer_public);
-
-	if ($secret) {
-		if ($command =~ /INIT/i) {      
-			my $public = $dh1080->public_key;
-      my $keyx_header = 'DH1080_FINISH';
-      if ($keyx_cbc == 1)
-      {
-        $keyx_header .= '_cbc';
-      }
-			$server->command("\^notice $user $keyx_header $public");
-			Irssi::print("Received key from $user -- sent back our pubkey.");
-		}
-		else {
-			Irssi::print("Negotiated key with $user");
-		}
-    if ($keyx_cbc == 1)
-    {
-      $secret = "cbc:$secret";
-    }
-    Irssi::print("Debug: key = $secret");
-		$channels{$user} = 'keyx:'.$secret;
-	}
-
-	# dont process this further
-	Irssi::signal_stop();
 }
 
 # This function generates random strings of a given length
@@ -507,7 +404,6 @@ sub encrypt
 
   # get key
   my $key = $channels{$channel};
-  $key = substr($key, 5) if $key =~ /^keyx:/;
   
   # local declarations
   my $encrypted_message = '';
@@ -639,9 +535,6 @@ sub decrypt
   # fixup for private messages
   $key = $channels{$nick} if $event_type eq "message_private";
 
-  # fixup for key exchange keys.
-  $key = substr($key, 5) if $key =~ /^keyx:/;
-
   # skip if there's no key for channel
   if (!$key) 
   {
@@ -764,7 +657,6 @@ Irssi::command_bind("blowon","blowon");
 Irssi::command_bind("blowoff","blowoff");
 Irssi::command_bind("blowkey","setkey");
 Irssi::command_bind("blowdel","delkey");
-Irssi::command_bind("blowkeyx", "keyx");
 Irssi::command_bind("blowhelp", "blowhelp");
 
 Irssi::signal_add("send text",sub { encrypt 'send_text' => @_ });
@@ -784,10 +676,4 @@ Irssi::signal_add_first{
     'message irc ctcp' => sub { decrypt 'message_ctcp' => @_ },
     'message irc own_ctcp' => sub { encrypt 'message_own_ctcp' => @_ },
   };
-
-# dh1080 handling
-Irssi::signal_add_first {
-	'message irc notice' => sub { keyx_handler 'message_notice' => @_ }
-};
-
 
