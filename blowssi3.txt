@@ -20,7 +20,7 @@ use strict;
 # ----------------- package info  ------------------
 
 # irssi package info
-my $VERSION = "0.0.2";
+my $VERSION = "0.0.1";
 my %IRSSI = (
   authors => 'John "Gothi[c]" Sennesael',
   contact => 'john@adminking.com',
@@ -51,16 +51,14 @@ sub blowkey
   # get params
   my $key = @_[0];
   my $orig_key = $key;
-  # don't need to do anything if it's already big enough.
-  if (length($key) >= 8)
-  {
-    return $key;
-  }
-  # keep adding the key to itself until it's larger than 8 bytes.
-  while (length($key) < 8)
+  # keep adding the key to itself until it's larger than 56 bytes.
+  while (length($key) < 56)
   {
     $key .= $key;
   }
+  # trunkate to 56 bytes
+  $key = substr($key,0,56);
+  # Irssi::print("key = $key - len = $len\n");
   return $key;
 }
 
@@ -210,6 +208,16 @@ sub setkey
   saveconf();
 }
 
+# used when a line is too long for a regular print
+sub enhanced_printing
+{
+  my ($server,$curchan,$in) = @_;
+  # calls the recursing sub recurs ... and 
+  my $arref = recurs($server,$curchan,$in);
+  # print out.
+  printout($arref,$server,$curchan);
+}
+
 # This function generates random strings of a given length
 sub generate_random_string
 {
@@ -279,21 +287,19 @@ sub encrypt
     # encrypt using cbc
     
     $key = substr($key,4); # chop of the "cbc:"
-    $key = blowkey($key); #expand >= 8 bytes.
+    $key = blowkey($key); #expand to exactly 56 bytes.
 
     my $randomiv = generate_random_string(8);  
     my $cipher = Crypt::CBC->new( -key => $key,
                                -cipher => 'Blowfish',
                                -header => 'none',
-                          -literal_key => 0,
-                                   -iv => $randomiv,
-                              -padding => 'null',
-                              -keysize => 56
+                          -literal_key => 1,
+                                   -iv => "\0\0\0\0\0\0\0\0",
+                              -padding => 'null'
                              );
-    $cipher->{literal_key} = 1; # hack around Crypt:CBC limitation/bug
-    my $cbc = $cipher->encrypt($randomiv . $data);
-    # uncomment below for debug
-    #Irssi::print("key = $key \n IV = $randomiv \n \$cbc=$cbc\n");
+
+    my $cbc = $randomiv . $cipher->encrypt($randomiv . $data);
+    Irssi::print("key = $key \n IV = $randomiv \n");
     $encrypted_message = $prefix . '*' . encode_base64($cbc);
     $method = 'cbc';
   }
@@ -310,8 +316,16 @@ sub encrypt
   # output line
   $server->print($channel->{name}, "<$nick|{$method}> \00311$data",MSGLEVEL_CLIENTCRAP);
   
+  # check if line is too long 
   $len = length($encrypted_message);
-  $server->command("\^msg -$server->{tag} $curchan $encrypted_message");
+  if ( irclen($len,$curchan,$server->{nick},$server->{userhost}) > 510)
+  {
+    enhanced_printing($server,$curchan,$encrypted_message);
+  }
+  else
+  {
+    $server->command("\^msg -$server->{tag} $curchan $encrypted_message");
+  }
   Irssi::signal_stop();
   return 1;
 }
@@ -384,18 +398,14 @@ sub decrypt
     # get the IV (first 8 bytes) and remove it from data;
     my $randomiv = substr($msgline,0,8);
     $msgline = substr($msgline,8);
-  
-    # make sure key > 8 bytes.
-    $key = blowkey($key);
-  
-    my $cipher = Crypt::CBC->new( -key => $key,
+    
+    my $cipher = Crypt::CBC->new( -key => blowkey($key),
                                -cipher => 'Blowfish',
                                -header => 'none',
-                          -literal_key => 0,
+                          -literal_key => 1,
                               -padding => 'null',
                                    -iv => $randomiv
                                 );
-    $cipher->{literal_key} = 1; # hack around Crypt::CBC limitation/bug
     $result = $cipher->decrypt($msgline);
     $method = 'cbc';
   }
