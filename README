@@ -4,12 +4,11 @@ John "Gothi[c]" Sennesael, donationcoder.com
 http://linkerror.com/tolipo.cgi
 
 Requires:
-  * perl (...duh)
+  * perl >= 5.8.8
   * Crypt::ircBlowfish (see bundeled zip file)
-  * Crypt::CBC (on gentoo you can just: emerge dev-perl/crypt-cbc)
-  * MIME:Base64 (on gentoo you can just: emerge perl-MIME-Base64 (which is a virtual package) 
-                 or emerge perl-core/MIME-Base64 though you probably already have it.)
-  * irssi (... duh!)
+  * Crypt::CBC
+  * MIME:Base64
+  * irssi >= 0.8.0
 
 Installation:
 

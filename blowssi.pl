@@ -20,7 +20,7 @@ use strict;
 # ----------------- package info  ------------------
 
 # irssi package info
-my $VERSION = "0.0.2";
+my $VERSION = "0.1.0";
 my %IRSSI = (
   authors => 'John "Gothi[c]" Sennesael',
   contact => 'john@adminking.com',
@@ -33,7 +33,7 @@ my %IRSSI = (
 # ----------------- init globals -------------------
 
 # default prefix
-my $prefix = '+OK ';
+my @prefixes = ('+OK ','mcps ');
 # crypt enabled by default
 my $docrypt = 1;
 # associative array for channel->key
@@ -192,8 +192,8 @@ sub setkey
 
   # parse params
   my $param=@_[0];
-  my $channel = (split(' ',$param))[0];
-  my $key = (split(' ',$param))[1];
+  my $channel = (split(' ',$param,2))[0];
+  my $key = (split(' ',$param,2))[1];
   # check user sanity
   if (!$channel)
   {
@@ -230,37 +230,137 @@ sub generate_random_string
 sub encrypt
 {
 
-  # skip if crypt is disabled
+  # Uncomment to debug signals.
+  #
+  #my $n = 0;
+  #foreach (@_)
+  #{
+  #  print "Debug encrypt: $n : $_"; 
+  #  $n++;
+  #}
+
+  # Skip if crypt is disabled.
   if ($docrypt == 0)
   {
     return 0;
   }
+  
+  # Holds parameters passed to function.
+  my @params = @_;
 
-  # get param data
-  my ($data, $server, $channel) = @_;
-  if (! $channel) { return 1; }
-  my $curchan = $channel->{name};
-  my $curserv = $server->{address};
-  my $line = shift;
-  chomp($line);
-  if (length($line) == 0)
+  # Type of signal received. 
+  my $event_type = @params[0];
+  
+  # Will hold Irssi server object.
+  my $server;
+
+  # Will hold channel name.
+  my $channel = '';
+
+  # Will hold message text.
+  my $message = '';
+
+  # Extract params for send_text events.
+  if ($event_type eq 'send_text')
+  {
+
+    # Get message text.
+    $message = @params[1];
+    chomp($message);
+
+    # Get server object.
+    $server = @params[2];
+
+    # Get channel or nickname.    
+    my $channel_object = @params[3];
+    $channel = $channel_object->{name};
+
+  }
+  # Extract params for send_command events.
+  elsif ($event_type eq 'send_command')
+  { 
+    # Get command the user entered (eg: /me says hi)
+    my $command_line = @params[1];
+
+    # Get server object.
+    $server = @params[2];
+
+    # Get channel object.
+    my $channel_object = @params[3];
+
+    # We handle /me and /action commands, which will
+    # be the first word in the $command_line string.
+    my $command = (split(' ',$command_line))[0];
+
+    # Target channel is the first param to the /action command.
+    # Message to send is the 3rd param to /action, 2nd to /me.
+    # Otherwise, for /me just get the channel from the active window.
+    if ($command =~ m/\/action/i)
+    {
+      $channel = (split(' ',$command_line,2))[1];
+      $message = (split(' ',$command_line,3))[2];
+      print "ACTION: $channel | $message";
+    }
+    elsif ($command =~ m/\/me/i)
+    {
+      $channel = $channel_object->{name};
+      $message = (split(' ',$command_line,2))[1];
+      print "ME: $channel | $message";
+    }
+    else
+    {
+      # The only send_command's we handle here are /me and /action...
+      return 0;
+    }    
+  }
+  # Extract params for everything else.
+  else
+  {
+
+    # Get server object.
+    $server = @params[1];
+
+    # Get message text.
+    $message = @params[2];
+    chomp($message);
+
+    # Get channel or nickname target
+    $channel = @params[3];
+
+  }
+ 
+  # Get the current active server address.
+  my $current_server = $server->{address};
+
+  # Get the user's nickname (own nickname).
+  my $own_nick = $server->{nick};
+
+  # If there's no text to encrypt, then don't try.
+  if (length($message) == 0)
   {
     return;
   }
-  my $nick = $server->{nick};
 
   # skip if line starts with `
-  if (substr($data,0,1) eq '`')
+  if (substr($message,0,1) eq '`')
   {
-    $data = substr($data,1);
-    $server->command("\^msg -$server->{tag} $curchan $data");
-    $server->print($channel->{name}, "<$nick|{NOT ENCRYPTED}> \00311$data",MSGLEVEL_CLIENTCRAP);
+    $message = substr($message,1);
+    if ($event_type eq 'send_command')
+    {
+      $server->command("\^ACTION -$server->{tag} $channel $message");
+      $server->print($channel, " ** $own_nick(NOT ENCRYPTED) \00311$message",MSGLEVEL_CLIENTCRAP);    
+    }
+    else
+    {
+      $server->command("\^msg -$server->{tag} $channel $message");
+      $server->print($channel, "<$own_nick|{NOT ENCRYPTED}> \00311$message",MSGLEVEL_CLIENTCRAP);
+    }
     Irssi::signal_stop();
-    return;
+    return 1;
   }
 
   # get key
-  my $key = $channels{$curchan};
+  my $key = $channels{$channel};
   
   # local declarations
   my $encrypted_message = '';
@@ -271,7 +371,7 @@ sub encrypt
   {
     return 0;
   }   
-
+  
   # check if we're doing cbc or not
   my $method = 'unknown';
   if (substr($key,0,4) eq 'cbc:')
@@ -280,7 +380,6 @@ sub encrypt
     
     $key = substr($key,4); # chop of the "cbc:"
     $key = blowkey($key); #expand >= 8 bytes.
-
     my $randomiv = generate_random_string(8);  
     my $cipher = Crypt::CBC->new( -key => $key,
                                -cipher => 'Blowfish',
@@ -291,10 +390,14 @@ sub encrypt
                               -keysize => 56
                              );
     $cipher->{literal_key} = 1; # hack around Crypt:CBC limitation/bug
-    my $cbc = $cipher->encrypt($randomiv . $data);
+    
+    # my $cbc = $cipher->encrypt($randomiv . $message);
+    my $cbc = $randomiv . $cipher->encrypt($message);
+ 
     # uncomment below for debug
-    #Irssi::print("key = $key \n IV = $randomiv \n \$cbc=$cbc\n");
-    $encrypted_message = $prefix . '*' . encode_base64($cbc);
+    #Irssi::print("randomiv = $randomiv \n \$cbc = $cbc\n");
+    
+    $encrypted_message = $prefixes[0] . '*' . encode_base64($cbc);
     $method = 'cbc';
   }
   else
@@ -304,14 +407,20 @@ sub encrypt
     $blowfish->set_key($key);
 
     # encrypt using blowfish
-    $encrypted_message = $prefix . $blowfish->encrypt($data);  
+    $encrypted_message = $prefixes[0] . $blowfish->encrypt($message);  
   }
 
   # output line
-  $server->print($channel->{name}, "<$nick|{$method}> \00311$data",MSGLEVEL_CLIENTCRAP);
-  
-  $len = length($encrypted_message);
-  $server->command("\^msg -$server->{tag} $curchan $encrypted_message");
+  if ($event_type eq 'send_command')
+  {
+    $server->print($channel, "** $own_nick($method) \00311$message",MSGLEVEL_CLIENTCRAP);
+    $server->command("\^ACTION -$server->{tag} $channel $encrypted_message");
+  }
+  else
+  {
+    $server->print($channel, "<$own_nick|{$method}> \00311$message",MSGLEVEL_CLIENTCRAP); 
+    $server->command("\^msg -$server->{tag} $channel $encrypted_message");
+  }
   Irssi::signal_stop();
   return 1;
 }
@@ -319,32 +428,45 @@ sub encrypt
 # decrypt text
 sub decrypt
 {
+  
+  # Uncomment to debug signals.
+  #
+  #my $n = 0;
+  #foreach (@_)
+  #{
+  #  print "DEBUG decrypt: $n : $_"; 
+  #  $n++;
+  #}
 
-  # skip if crypt is disabled.
+  # Skip if crypt is disabled.
   if ($docrypt == 0)
   {
     return 0;
   }
 
-  # get param data
-  my ($server,$data,$nick,$address) = @_;
-  my ($channel,$text,$msgline,$msgnick,$curchan,$curserv);
-  if ( ! defined($address) ) # dcc chat
+  # Holds parameters passed to function.
+  my @params = @_;
+
+  # Type of signal received. 
+  my $event_type = @params[0];
+  
+  # Irssi server object.
+  my $server = @params[1];
+
+  # Don't decrypt own text.
+  if ( $event_type =~ /own/ )
   {
-    $msgline = $data;
-    $curserv = $server->{server}->{address};
-    $channel = $curchan = "=".$nick;
-    $msgnick = $nick;
-    $server  = $server->{server};
-  } else
-  {
-    ($channel, $text) = $data =~ /^(\S*)\s:(.*)/;
-    $msgline = $text;
-    $msgnick = $server->{nick};
-    $curchan = $channel;
-    $curserv = $server->{address};
+    return 0;
   }
 
+  # Get message text, nickname of other party, hotmask of other party.
+  my $message = @params[2];
+  my $nick = @params[3];
+  my $hotmask = @params[4];
+
+  # Get channel.
+  my $channel = @params[5];
+  
   # local declarations
   my $result = '';
   my $key = $channels{$channel};
@@ -357,33 +479,40 @@ sub decrypt
   }
 
   # check for prefix
-  my $ppfix = substr $msgline, 0, length($prefix);
-  if ($ppfix eq $prefix)
-  { 
-    # remove prefix
-    $msgline = substr $msgline,length($prefix);
-  }
-  else
+  my $found_prefix = 0;
+  foreach my $prefix (@prefixes)
   {
-    # skip if message is not encrypted
+    my $ppfix = substr $message, 0, length($prefix);
+    if ($ppfix eq $prefix)
+    { 
+      # remove prefix
+      $message = substr $message,length($prefix);
+      $found_prefix = 1;
+      last;
+    }
+  }
+
+  # skip encryption if the message isn't prefixed with an encryption trigger.
+  if ($found_prefix == 0)
+  {
     return 0;
   }
 
+  # detect encryption type...
   if (substr($key,0,4) eq 'cbc:')
   {
-    # decrypt with cbc
-    
+    # decrypt with cbc    
     $key = substr($key,4); # get rid of "cbc:" from key
     
     # remove the asterisk from data
-    $msgline = substr($msgline,1);
+    $message = substr($message,1);
 
     # base64 decode the rest
-    $msgline = decode_base64($msgline);
+    $message = decode_base64($message);
 
     # get the IV (first 8 bytes) and remove it from data;
-    my $randomiv = substr($msgline,0,8);
-    $msgline = substr($msgline,8);
+    my $randomiv = substr($message,0,8);
+    $message = substr($message,8);
   
     # make sure key > 8 bytes.
     $key = blowkey($key);
@@ -396,7 +525,7 @@ sub decrypt
                                    -iv => $randomiv
                                 );
     $cipher->{literal_key} = 1; # hack around Crypt::CBC limitation/bug
-    $result = $cipher->decrypt($msgline);
+    $result = $cipher->decrypt($message);
     $method = 'cbc';
   }
   else
@@ -404,20 +533,28 @@ sub decrypt
     # decrypt with blowfish
     $method = 'ecb';
     $blowfish->set_key($key);
-    $result = $blowfish->decrypt($msgline);
+    $result = $blowfish->decrypt($message);
   }
 
   # output result
   if (length($result))
-  {
-    $server->print($channel, "<$nick|{$method}> \00311$result", MSGLEVEL_CLIENTCRAP);
-    Irssi::signal_stop();
-    return 1;
+  { 
+    if ($event_type eq 'message_action')
+    {
+      $server->print($channel, " ** $nick($method) \00311$result", MSGLEVEL_CLIENTCRAP);   
+    }
+    else
+    {
+      $server->print($channel, "<$nick|{$method}> \00311$result", MSGLEVEL_CLIENTCRAP);
+    }
   }
   else
   {
     return 0;
   }
+
+  Irssi::signal_stop();
+  return 1;
 }
 
 # dcc proxy function because params for dcc messages are different
@@ -440,8 +577,18 @@ Irssi::command_bind("blowon","blowon");
 Irssi::command_bind("blowoff","blowoff");
 Irssi::command_bind("blowkey","setkey");
 Irssi::command_bind("blowdel","delkey");
+
+Irssi::signal_add("send text",sub { encrypt 'send_text' => @_ });
+Irssi::signal_add("send command",sub {encrypt 'send_command' => @_});
+
 # register irssi signals
-Irssi::signal_add("event privmsg","decrypt");
-Irssi::signal_add("dcc chat message","dcc");
-Irssi::signal_add("send text","encrypt");
+Irssi::signal_add_first{
+    'message private' => sub { decrypt 'message_private' => @_ },    
+    'message public' =>  sub { decrypt 'message_public' => @_ },    
+    'message irc action' => sub { decrypt 'message_action' => @_ },    
+    'message irc notice' => sub { decrypt 'message_notice' => @_ },
+    'message irc own_notice' => sub { encrypt 'message_own_notice' => @_ },
+    'message irc ctcp' => sub { decrypt 'message_ctcp' => @_ },
+    'message irc own_ctcp' => sub { encrypt 'message_own_ctcp' => @_} 
+  };
 

@@ -1,0 +1,8 @@
+Known bugs for blowssi 0.1.0 --------------------------------------------------
+
+  - There have been problems reported with encryption/decryption 
+    for scandinavian characters, umlauts, unicode,...
+
+  - DCC chat, /notice and /ctcp are not encrypted.
+
+
