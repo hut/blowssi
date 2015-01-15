@@ -565,7 +565,7 @@ sub encrypt
   }
   else
   {
-    $server->print($channel, "<$own_nick|{$method}> \00311$message",MSGLEVEL_CLIENTCRAP); 
+    $server->print($channel, "$own_nick: $message", MSGLEVEL_CLIENTCRAP);
     $server->command("\^msg -$server->{tag} $channel $encrypted_message");
   }
   Irssi::signal_stop();
@@ -659,7 +659,7 @@ sub decrypt
     }
     elsif ($event_type eq 'message_private')
     {
-      $server->print($nick, "<$nick|{$method}> \00311$result", MSGLEVEL_CLIENTCRAP);
+      $server->print($nick, "$nick: $result", MSGLEVEL_CLIENTCRAP);
     }
     else
     {
