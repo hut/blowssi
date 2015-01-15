@@ -1,5 +1,23 @@
 #!/usr/bin/perl -w
 
+# blowssi - an mircryption/FiSH compatible irssi script
+# Copyright (C) 2009 John Sennesael
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ 
+
+
 # -------------------- includes --------------------
 
 # include ircBlowfish
@@ -8,6 +26,9 @@ use Crypt::ircBlowfish;
 # include everything needed cbc+base64
 use Crypt::CBC;
 use MIME::Base64;
+
+# include DH1080 needed
+use Crypt::ircDH1080;
 
 # include irssi stuff
 use Irssi::Irc;
@@ -20,12 +41,12 @@ use strict;
 # ----------------- package info  ------------------
 
 # irssi package info
-my $VERSION = "0.1.0";
+my $VERSION = "0.2.0";
 my %IRSSI = (
-  authors => 'John "Gothi[c]" Sennesael',
+  authors => 'John "Gothi[c]" Sennesael & Tanesha',
   contact => 'john@adminking.com',
   name => 'blowssi',
-  description => 'Fish and mircryption compatible blowfish/cbc encryption',
+  description => 'Fish and mircryption compatible blowfish/cbc encryption (+dh1080 keyx)',
   license => 'GNU GPL v3',
   url => 'http://linkerror.com/blowssi.cgi'
 );
@@ -42,6 +63,10 @@ my %channels;
 my $config_file = Irssi::get_irssi_dir()."/blowssi.conf";
 # init blowfish object
 my $blowfish = new Crypt::ircBlowfish;
+# init dh1080 object
+my $dh1080 = new Crypt::ircDH1080;
+# Are we using cbc with keyx?
+my $keyx_cbc = 0;
 
 # ----------------- subroutines --------------------
 
@@ -73,8 +98,8 @@ sub loadconf
   # if config file does not exist, create it with default settings and exit.
   if (!( -f CONF))
   {
-    Irssi::print("\00305> $config_file not found, using default settings.\n");
-    Irssi::print("\00305> Creating $config_file with default values.\n\n");
+    Irssi::print("\00305> $config_file not found, using default settings.");
+    Irssi::print("\00305> Creating $config_file with default values.\n");
     close(CONF);
     open(CONF,">$config_file");
     close(CONF);
@@ -103,7 +128,7 @@ sub loadconf
       Irssi:print("\00305> Loaded key for channel: $channel");
     }
   }
-  Irssi::print("\00314- configuration file loaded.\n");
+  Irssi::print("\00314- configuration file loaded.");
   return 1;
 }
 
@@ -120,7 +145,7 @@ sub saveconf
   # error check
   if (!( -f CONF))
   {
-    Irssi::print("\00305> Could not load config file: $config_file\n");
+    Irssi::print("\00305> Could not load config file: $config_file");
     close(CONF);
     return 1;
   }
@@ -128,6 +153,8 @@ sub saveconf
   # write out config
   while ( ($channel,$key) = each(%channels) )
   {
+	  # don't save keyx keys (as the pub/priv key changes for each load)
+	  next if $key =~ /^keyx:/;
     if ( ($channel) && ($key) )
     {
       print CONF "$channel:$key\n";
@@ -145,7 +172,7 @@ sub delkey
   # check user sanity
   if (!$channel)
   {
-    Irssi::print("No channel specified. Syntax: /blowdel channel\n");
+    Irssi::print("No channel specified. Syntax: /blowdel channel");
     return 1;
   }
 
@@ -156,7 +183,7 @@ sub delkey
   saveconf();
 
   # print status
-  Irssi::print("Key deleted, and no longer using encryption for $channel\n");
+  Irssi::print("Key deleted, and no longer using encryption for $channel");
 
 }
 
@@ -176,14 +203,14 @@ sub irclen
 sub blowon
 {
   $docrypt = 1;
-  Irssi::print("Blowfish encryption/decryption enabled\n");
+  Irssi::print("Blowfish encryption/decryption enabled");
 }
 
 # turn off blowfish encryption
 sub blowoff
 {
   $docrypt = 0;
-  Irssi::print("Blowfish encryption/decryption disabled\n");
+  Irssi::print("Blowfish encryption/decryption disabled");
 }
 
 # change encryption key
@@ -194,20 +221,135 @@ sub setkey
   my $param=@_[0];
   my $channel = (split(' ',$param,2))[0];
   my $key = (split(' ',$param,2))[1];
+
+  unless ($key && $channel) {
+	  Irssi::print("Current configuration..");
+	  foreach my $k (keys %channels) {
+		  Irssi::print("$k -> $channels{$k}");
+	  }
+	  return;
+  }
+
   # check user sanity
   if (!$channel)
   {
-    Irssi::print("Error: no channel specified. Syntax is /blowkey channel key\n");
+    Irssi::print("Error: no channel specified. Syntax is /blowkey channel key");
     return 1;
   }
   if (!$key)
   {
-    Irssi::print("Error: no key specified. Syntax is /blowkey channel key\n");
+    Irssi::print("Error: no key specified. Syntax is /blowkey channel key");
     return 1;
   }
   $channels{$channel} = $key;
-  Irssi::print("Key for $channel set to $key\n");
+  Irssi::print("Key for $channel set to $key");
   saveconf();
+}
+
+sub blowhelp {
+	Irssi::print("$IRSSI{description}");
+	Irssi::print("Commands");
+	Irssi::print("---------------------------------------------------------------");
+	Irssi::print("/blowhelp                       Show this help");
+	Irssi::print("/blowon                         Turn blowfish back on.");
+	Irssi::print("/blowoff                        Temporarily disable all blowfish.");
+	Irssi::print("/blowkey <user|chan> <key>      Statically set key for a channel.");
+	Irssi::print("/blowkeyx <cbc|ebc> <user|chan> Perform DH1080 key exchange with user.");
+	Irssi::print("/blowdel <user|chan>            Remove key for user.");
+	Irssi::print("");
+}
+
+sub keyx {
+  # get params
+	my ($params, $server, $winit) = @_;  
+  my ($method,$user) = split(/\s/,$params);
+  #Irssi::print("Debug: PARAMS='$params' USER='$user' METHOD='$method'");
+  # check encryption method validity
+  if (!$method)
+  {
+    Irssi::print("Error: no method specified. Specify either cbc or ecb.");
+  }
+  if (($method ne 'cbc') and ($method ne 'ecb'))
+  {
+    Irssi::print("Error: unknown method: $method. Specify either cbc or ecb. Correct syntax is /blowkeyx method nickname");
+    return 1;
+  }
+	# check user validity
+	if (!$user)
+	{
+		Irssi::print("Error: no user specified. Syntax is /blowkeyx method nickname");
+		return 1;
+	}
+	# remove the old key (if any)
+	delete $channels{$user};
+  # get pubkey, store header...
+	my $pubkey = $dh1080->public_key;  
+  my $keyx_header="DH1080_INIT";
+  # manipulate header for cbc if needed.
+  if ($method eq 'cbc')
+  {
+    $keyx_header .= '_cbc';
+    $keyx_cbc = 1;
+  }
+  else
+  {
+    $keyx_cbc = 0;
+  }
+	$server->command("\^notice $user $keyx_header $pubkey");
+	Irssi::print("KeyX started for $user using $method");
+}
+
+sub keyx_handler {
+  # Get params.
+	my ($event_type, $server, $message, $user) = @_;  
+	chomp $message;
+  # Uncomment for debug.
+	# Irssi::print("$event_type keyx_finish on $message"); 
+  
+	my ($command, $cbcflag, $peer_public) = $message =~ /DH1080_(INIT|FINISH)(_cbc)? (.*)/i;
+  if (!$peer_public)
+  {
+    # (_cbc)? did not match, so $cbcflag is now really $peer_public. fixing that:
+    $peer_public = $cbcflag;
+    $cbcflag='';
+  }
+  if ($cbcflag eq '_cbc')
+  {
+    $keyx_cbc = 1;
+  }
+  else
+  {
+    $keyx_cbc = 0;
+  }
+	return 1 unless $command && $peer_public;
+
+	# handle it.
+	my $secret = $dh1080->get_shared_secret($peer_public);
+
+	if ($secret) {
+		if ($command =~ /INIT/i) {      
+			my $public = $dh1080->public_key;
+      my $keyx_header = 'DH1080_FINISH';
+      if ($keyx_cbc == 1)
+      {
+        $keyx_header .= '_cbc';
+      }
+			$server->command("\^notice $user $keyx_header $public");
+			Irssi::print("Received key from $user -- sent back our pubkey.");
+		}
+		else {
+			Irssi::print("Negotiated key with $user");
+		}
+    if ($keyx_cbc == 1)
+    {
+      $secret = "cbc:$secret";
+    }
+    Irssi::print("Debug: key = $secret");
+		$channels{$user} = 'keyx:'.$secret;
+	}
+
+	# dont process this further
+	Irssi::signal_stop();
 }
 
 # This function generates random strings of a given length
@@ -341,10 +483,14 @@ sub encrypt
     return;
   }
 
+  # if its dh1080_finish then skip encryption
+  return if $message =~ /^DH1080_FINISH/;
+
   # skip if line starts with `
   if (substr($message,0,1) eq '`')
   {
     $message = substr($message,1);
+
     if ($event_type eq 'send_command')
     {
       $server->command("\^ACTION -$server->{tag} $channel $message");
@@ -361,6 +507,7 @@ sub encrypt
 
   # get key
   my $key = $channels{$channel};
+  $key = substr($key, 5) if $key =~ /^keyx:/;
   
   # local declarations
   my $encrypted_message = '';
@@ -425,6 +572,23 @@ sub encrypt
   return 1;
 }
 
+sub topic {
+	my ($server, $msg) = @_;
+
+	my ($nick, $channel) = $msg =~ /^([^\s]+)\s+([^\s]+)/;
+	my ($topic) = $msg =~ /:(.*)/;
+
+	my $key = $channels{$channel};
+
+	if (!$key) {
+		return;
+	}
+	else {
+		my ($result, $method) = decrypt_msg($key, $topic);
+		Irssi::signal_continue($server, "$nick $channel :{$method} $result");
+	}
+}
+
 # decrypt text
 sub decrypt
 {
@@ -466,17 +630,56 @@ sub decrypt
 
   # Get channel.
   my $channel = @params[5];
+
+  # Irssi::print("decrypt-params: " . join(", ", @params));
   
   # local declarations
-  my $result = '';
   my $key = $channels{$channel};
-  my $method = '';
+
+  # fixup for private messages
+  $key = $channels{$nick} if $event_type eq "message_private";
+
+  # fixup for key exchange keys.
+  $key = substr($key, 5) if $key =~ /^keyx:/;
 
   # skip if there's no key for channel
   if (!$key) 
   {
     return 0;
   }
+
+  my ($result, $method) = decrypt_msg($key, $message);
+
+  # output result
+  if (length($result))
+  { 
+    if ($event_type eq 'message_action')
+    {
+      $server->print($channel, " ** $nick($method) \00311$result", MSGLEVEL_CLIENTCRAP);   
+    }
+    elsif ($event_type eq 'message_private')
+    {
+      $server->print($nick, "<$nick|{$method}> \00311$result", MSGLEVEL_CLIENTCRAP);
+    }
+    else
+    {
+		  $server->print($channel, "<$nick:$channel> \00311$result", MSGLEVEL_CLIENTCRAP);
+    }
+  }
+  else
+  {
+    return 0;
+  }
+
+  Irssi::signal_stop();
+  return 1;
+}
+
+sub decrypt_msg {
+	my ($key, $message) = @_;
+
+  my $method = '';
+  my $result = '';
 
   # check for prefix
   my $found_prefix = 0;
@@ -495,7 +698,7 @@ sub decrypt
   # skip encryption if the message isn't prefixed with an encryption trigger.
   if ($found_prefix == 0)
   {
-    return 0;
+    return ("{unencrypted} $message",$method);
   }
 
   # detect encryption type...
@@ -536,25 +739,9 @@ sub decrypt
     $result = $blowfish->decrypt($message);
   }
 
-  # output result
-  if (length($result))
-  { 
-    if ($event_type eq 'message_action')
-    {
-      $server->print($channel, " ** $nick($method) \00311$result", MSGLEVEL_CLIENTCRAP);   
-    }
-    else
-    {
-      $server->print($channel, "<$nick|{$method}> \00311$result", MSGLEVEL_CLIENTCRAP);
-    }
-  }
-  else
-  {
-    return 0;
-  }
+  chomp $result;
 
-  Irssi::signal_stop();
-  return 1;
+	return ($result, $method);
 }
 
 # dcc proxy function because params for dcc messages are different
@@ -577,9 +764,15 @@ Irssi::command_bind("blowon","blowon");
 Irssi::command_bind("blowoff","blowoff");
 Irssi::command_bind("blowkey","setkey");
 Irssi::command_bind("blowdel","delkey");
+Irssi::command_bind("blowkeyx", "keyx");
+Irssi::command_bind("blowhelp", "blowhelp");
 
 Irssi::signal_add("send text",sub { encrypt 'send_text' => @_ });
 Irssi::signal_add("send command",sub {encrypt 'send_command' => @_});
+
+Irssi::signal_add_first("event topic", "topic");
+Irssi::signal_add_first("event 331", "topic");
+Irssi::signal_add_first("event 332", "topic");
 
 # register irssi signals
 Irssi::signal_add_first{
@@ -589,6 +782,12 @@ Irssi::signal_add_first{
     'message irc notice' => sub { decrypt 'message_notice' => @_ },
     'message irc own_notice' => sub { encrypt 'message_own_notice' => @_ },
     'message irc ctcp' => sub { decrypt 'message_ctcp' => @_ },
-    'message irc own_ctcp' => sub { encrypt 'message_own_ctcp' => @_} 
+    'message irc own_ctcp' => sub { encrypt 'message_own_ctcp' => @_ },
   };
+
+# dh1080 handling
+Irssi::signal_add_first {
+	'message irc notice' => sub { keyx_handler 'message_notice' => @_ }
+};
+
 
