@@ -456,12 +456,12 @@ sub encrypt
   # output line
   if ($event_type eq 'send_command')
   {
-    $server->print($channel, "** $own_nick($method) \00311$message",MSGLEVEL_CLIENTCRAP);
+    $server->print($channel, "** $own_nick($method) \003\002\002$message",MSGLEVEL_CLIENTCRAP);
     $server->command("\^ACTION -$server->{tag} $channel $encrypted_message");
   }
   else
   {
-    $server->print($channel, "\00310$own_nick\00314: \00315$message", MSGLEVEL_CLIENTCRAP);
+    $server->print($channel, "\00310$own_nick\00314: \003\002\002$message", MSGLEVEL_CLIENTCRAP);
     $server->command("\^msg -$server->{tag} $channel $encrypted_message");
   }
   Irssi::signal_stop();
@@ -556,7 +556,13 @@ sub decrypt
     }
     else
     {
-		  $server->print($channel, "\00303$nick\00314: \00315$result", MSGLEVEL_PUBLIC);
+      # XXX
+      if ($result =~ /hut/) {
+        $server->print($channel, "\00308$nick\00314: \00300$result", MSGLEVEL_HILIGHT);
+      }
+      else {
+        $server->print($channel, "\00303$nick\00314: \003\002\002$result", MSGLEVEL_PUBLIC);
+      }
     }
   }
   else
