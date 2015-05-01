@@ -456,12 +456,12 @@ sub encrypt
   # output line
   if ($event_type eq 'send_command')
   {
-    $server->print($channel, "** $own_nick($method) \003\002\002$message",MSGLEVEL_CLIENTCRAP);
+    $server->print($channel, "** $own_nick($method) \003\002\002$message",MSGLEVEL_PUBLIC);
     $server->command("\^ACTION -$server->{tag} $channel $encrypted_message");
   }
   else
   {
-    $server->print($channel, "\00310$own_nick\00314: \003\002\002$message", MSGLEVEL_CLIENTCRAP);
+    $server->print($channel, "\00310$own_nick\00314: \003\002\002$message", MSGLEVEL_PUBLIC);
     $server->command("\^msg -$server->{tag} $channel $encrypted_message");
   }
   Irssi::signal_stop();
